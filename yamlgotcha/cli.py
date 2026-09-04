@@ -5,7 +5,7 @@ need a third-party library (PyYAML/ruamel), and pulling one in for a tool
 whose whole job is "catch mistakes before they bite you at parse time" felt
 backwards. Block-mapping structure is tracked with an indent stack instead,
 which covers the common case (nested key: value config files) and misses
-flow-style mappings and multi-document streams for now.
+flow-style mappings for now.
 """
 
 import argparse
@@ -76,6 +76,13 @@ def scan_lines(lines, filename):
 
         stripped_for_comment = _strip_comment(line)
         if not stripped_for_comment.strip():
+            continue
+
+        if stripped_for_comment.strip() == "---":
+            # Start of a new document in a `---`-separated stream. Keys
+            # in the new document are independent of the previous one,
+            # so the duplicate-key tracking has to start over too.
+            stack = [{"indent": -1, "keys": set()}]
             continue
 
         leading = line[: len(line) - len(line.lstrip(" \t"))]

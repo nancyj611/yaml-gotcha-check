@@ -100,7 +100,9 @@ or just run it directly with `python -m yamlgotcha.cli <files>`.
 `yamlgotcha` does not build a full YAML document tree — it tracks
 mapping structure with an indentation stack while reading line by line.
 That covers plain nested `key: value` config files, which is most of
-what people hand-edit, but it does not currently understand flow-style
-mappings (`{a: 1, b: 2}`), multi-document streams (`---` separators), or
-duplicate keys inside block scalars. See the roadmap in commit history
-for what's planned next.
+what people hand-edit. A bare `---` on its own line is treated as the
+start of a new document, so duplicate-key tracking resets there and a
+key repeated across documents (common in Kubernetes multi-manifest
+files) isn't flagged. It does not currently understand flow-style
+mappings (`{a: 1, b: 2}`) or duplicate keys inside block scalars. See
+the roadmap in commit history for what's planned next.
