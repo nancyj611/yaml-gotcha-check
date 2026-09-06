@@ -82,6 +82,7 @@ $ yamlgotcha config/*.yaml
 | YG001 | duplicate key at the same nesting level |
 | YG002 | tab character used in leading indentation |
 | YG003 | bare scalar that YAML 1.1 loaders coerce to a boolean (Norway problem) |
+| YG004 | duplicate key inside a `{...}` flow mapping (last one silently wins) |
 
 ## Install
 
@@ -103,6 +104,10 @@ That covers plain nested `key: value` config files, which is most of
 what people hand-edit. A bare `---` on its own line is treated as the
 start of a new document, so duplicate-key tracking resets there and a
 key repeated across documents (common in Kubernetes multi-manifest
-files) isn't flagged. It does not currently understand flow-style
-mappings (`{a: 1, b: 2}`) or duplicate keys inside block scalars. See
-the roadmap in commit history for what's planned next.
+files) isn't flagged. Duplicate keys inside flow-style mappings
+(`{a: 1, b: 2, a: 3}`) are caught, but only within a single line — a
+flow mapping split across several lines is not tracked, since that
+would require carrying bracket-nesting state between lines instead of
+resetting per line. It also does not check for duplicate keys inside
+block scalars. See the roadmap in commit history for what's planned
+next.

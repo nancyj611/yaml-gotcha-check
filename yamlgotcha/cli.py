@@ -4,8 +4,10 @@ Deliberately does not parse YAML into a document tree. A real parser would
 need a third-party library (PyYAML/ruamel), and pulling one in for a tool
 whose whole job is "catch mistakes before they bite you at parse time" felt
 backwards. Block-mapping structure is tracked with an indent stack instead,
-which covers the common case (nested key: value config files) and misses
-flow-style mappings for now.
+which covers the common case (nested key: value config files). Flow-style
+mappings (`{a: 1, b: 2}`) are handled separately with a single-pass
+character scan per line, so a flow mapping split across multiple lines
+isn't caught.
 """
 
 import argparse
@@ -63,6 +65,66 @@ def _is_quoted(value):
     return len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"')
 
 
+def _find_flow_mapping_duplicates(text):
+    """Find duplicate keys inside `{...}` flow mappings on a single line.
+
+    Single-pass character scan rather than a regex: flow mappings can
+    nest (`{a: {b: 1, b: 2}}`) and each `{}` has its own independent set
+    of sibling keys, which needs a stack, not a flat pattern. `[...]`
+    is tracked too, only so a comma inside a flow sequence doesn't get
+    mistaken for an entry separator in an enclosing flow mapping.
+    """
+    findings = []
+    stack = []
+    in_single = in_double = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if in_single:
+            if ch == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+        if ch == "'":
+            in_single = True
+        elif ch == '"':
+            in_double = True
+        elif ch == "{":
+            stack.append({"type": "{", "keys": set(), "entry_start": i + 1, "seen_colon": False})
+        elif ch == "[":
+            stack.append({"type": "[", "entry_start": i + 1})
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+        elif ch == "," and stack and stack[-1]["type"] == "{":
+            stack[-1]["entry_start"] = i + 1
+            stack[-1]["seen_colon"] = False
+        elif ch == ":" and stack and stack[-1]["type"] == "{" and not stack[-1]["seen_colon"]:
+            frame = stack[-1]
+            frame["seen_colon"] = True
+            key_start = frame["entry_start"]
+            while key_start < i and text[key_start] in " \t":
+                key_start += 1
+            key_raw = text[key_start:i].strip()
+            if key_raw:
+                key_text = key_raw[1:-1] if _is_quoted(key_raw) else key_raw
+                if key_text in frame["keys"]:
+                    findings.append((key_start + 1, key_text))
+                else:
+                    frame["keys"].add(key_text)
+        i += 1
+    return findings
+
+
 def scan_lines(lines, filename):
     findings = []
     # stack of {"indent": int, "keys": set()} tracking sibling keys at
@@ -90,6 +152,12 @@ def scan_lines(lines, filename):
             findings.append(Finding(
                 filename, lineno, leading.index("\t") + 1, "YG002",
                 "tab used for indentation (YAML forbids tabs here)",
+            ))
+
+        for col, key in _find_flow_mapping_duplicates(stripped_for_comment):
+            findings.append(Finding(
+                filename, lineno, col, "YG004",
+                "duplicate key %r in flow mapping (last one silently wins)" % key,
             ))
 
         content = stripped_for_comment
