@@ -29,6 +29,16 @@ AMBIGUOUS_SCALARS = {
     "off", "Off", "OFF",
 }
 
+# Two more YAML 1.1 core schema surprises: a value that's a leading zero
+# followed only by octal digits is parsed as octal (`mode: 0755` becomes
+# the int 493, not 755), and a value made of digit groups joined by
+# colons is parsed as base-60 (`duration: 1:30` becomes the int 90, not
+# a string). Both patterns show up naturally in config files (file
+# modes, cron-ish time strings) without anyone intending a number at
+# all, let alone that number.
+OCTAL_RE = re.compile(r'^[-+]?0[0-7]+$')
+SEXAGESIMAL_RE = re.compile(r'^[-+]?[1-9][0-9]*(?::[0-5]?[0-9])+$')
+
 KEY_LINE = re.compile(
     r'^(?P<indent>[ \t]*)'
     r'(?P<key>"[^"]*"|\'[^\']*\'|[^\s:#][^:]*?)'
@@ -205,12 +215,25 @@ def scan_lines(lines, filename):
                 "key %r will be parsed as a boolean, not the string %r" % (key_raw, key_raw),
             ))
 
-        if value_raw and not _is_quoted(value_raw) and value_raw in AMBIGUOUS_SCALARS:
+        if value_raw and not _is_quoted(value_raw):
             value_col = match.start("value") + 1
-            findings.append(Finding(
-                filename, lineno, value_col, "YG003",
-                "value %r will be parsed as a boolean, not the string %r" % (value_raw, value_raw),
-            ))
+            if value_raw in AMBIGUOUS_SCALARS:
+                findings.append(Finding(
+                    filename, lineno, value_col, "YG003",
+                    "value %r will be parsed as a boolean, not the string %r" % (value_raw, value_raw),
+                ))
+            elif OCTAL_RE.match(value_raw):
+                findings.append(Finding(
+                    filename, lineno, value_col, "YG005",
+                    "value %r will be parsed as octal %d, not the string %r"
+                    % (value_raw, int(value_raw, 8), value_raw),
+                ))
+            elif SEXAGESIMAL_RE.match(value_raw):
+                findings.append(Finding(
+                    filename, lineno, value_col, "YG006",
+                    "value %r will be parsed as base-60 %d, not the string %r"
+                    % (value_raw, sum(int(part) * 60 ** i for i, part in enumerate(reversed(value_raw.split(":")))), value_raw),
+                ))
 
     return findings
 

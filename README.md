@@ -17,15 +17,20 @@ region: eu-west-1
 notify_on_failure: NO
 retries: 3
 retries: 5
+mode: 0755
+backoff: 1:30
 ```
 
 Most YAML loaders (PyYAML's `SafeLoader`, Ruby's `Psych`, and others that
 follow the YAML 1.1 core schema) parse `notify_on_failure: NO` as
 `False`, not the string `"NO"` — this is widely known as the Norway
-problem, since it also bites two-letter country codes. And `retries` is
+problem, since it also bites two-letter country codes. `retries` is
 defined twice; nothing errors, the second definition just wins and the
-first is gone. Both of these load cleanly and fail quietly, usually
-nowhere near the config file itself.
+first is gone. `mode: 0755` becomes the int `493`, because a leading
+zero means octal in the YAML 1.1 core schema. And `backoff: 1:30` becomes
+the int `90`, because digit groups joined by colons are parsed as
+base-60. All four load cleanly and fail quietly, usually nowhere near
+the config file itself.
 
 ## Usage
 
@@ -83,6 +88,8 @@ $ yamlgotcha config/*.yaml
 | YG002 | tab character used in leading indentation |
 | YG003 | bare scalar that YAML 1.1 loaders coerce to a boolean (Norway problem) |
 | YG004 | duplicate key inside a `{...}` flow mapping (last one silently wins) |
+| YG005 | bare `0`-prefixed digit string that YAML 1.1 loaders parse as octal |
+| YG006 | bare colon-joined digit groups that YAML 1.1 loaders parse as base-60 |
 
 ## Install
 
