@@ -1,6 +1,6 @@
 [project]
 name = "yamlgotcha"
-version = "0.2.0"
+version = "0.3.0"
 description = "Scan YAML config files for classic parsing footguns"
 readme = "README.md"
 requires-python = ">=3.9"

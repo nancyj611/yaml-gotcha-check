@@ -135,6 +135,48 @@ def _find_flow_mapping_duplicates(text):
     return findings
 
 
+@dataclass
+class ParsedLine:
+    list_prefix_len: int
+    key_indent: int
+    key_raw: str
+    key_text: str
+    value_raw: str
+    value_start: int  # 0-based column in the source line, -1 if there's no value
+
+
+def _parse_key_line(content):
+    """Parse a comment-stripped line into its key/value structure, if any.
+
+    Shared by the scanner and --fix: both need the exact column where the
+    key and value tokens start (not just their text), and both need the
+    same "- " list-prefix handling so columns line up with the source line.
+    """
+    list_prefix_len = 0
+    body = content.lstrip(" \t")
+    indent = len(content) - len(body)
+    while body.startswith("- "):
+        list_prefix_len += 2
+        body = body[2:]
+        indent += 2
+
+    match = KEY_LINE.match(" " * indent + body)
+    if not match:
+        return None
+
+    key_raw = match.group("key").strip()
+    value_raw = (match.group("value") or "").strip()
+    key_indent = len(match.group("indent"))
+    key_text = key_raw[1:-1] if _is_quoted(key_raw) else key_raw
+    value_start = match.start("value") if match.group("value") else -1
+
+    return ParsedLine(list_prefix_len, key_indent, key_raw, key_text, value_raw, value_start)
+
+
+def _quote(value):
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def scan_lines(lines, filename):
     findings = []
     # stack of {"indent": int, "keys": set()} tracking sibling keys at
@@ -170,27 +212,18 @@ def scan_lines(lines, filename):
                 "duplicate key %r in flow mapping (last one silently wins)" % key,
             ))
 
-        content = stripped_for_comment
         # Sequence items ("- foo" / "- key: value") are not tracked for
         # duplicate-key purposes; only their inline mapping value (if any)
         # is checked for ambiguous scalars.
-        list_prefix_len = 0
-        body = content.lstrip(" \t")
-        indent = len(content) - len(body)
-        while body.startswith("- "):
-            list_prefix_len += 2
-            body = body[2:]
-            indent += 2
-
-        match = KEY_LINE.match(" " * indent + body)
-        if not match:
+        parsed = _parse_key_line(stripped_for_comment)
+        if parsed is None:
             continue
 
-        key_raw = match.group("key").strip()
-        value_raw = (match.group("value") or "").strip()
-        key_indent = len(match.group("indent"))
-
-        key_text = key_raw[1:-1] if _is_quoted(key_raw) else key_raw
+        list_prefix_len = parsed.list_prefix_len
+        key_indent = parsed.key_indent
+        key_raw = parsed.key_raw
+        key_text = parsed.key_text
+        value_raw = parsed.value_raw
 
         if list_prefix_len == 0:
             while len(stack) > 1 and stack[-1]["indent"] > key_indent:
@@ -216,7 +249,7 @@ def scan_lines(lines, filename):
             ))
 
         if value_raw and not _is_quoted(value_raw):
-            value_col = match.start("value") + 1
+            value_col = parsed.value_start + 1
             if value_raw in AMBIGUOUS_SCALARS:
                 findings.append(Finding(
                     filename, lineno, value_col, "YG003",
@@ -244,6 +277,75 @@ def scan_file(path):
     return scan_lines(lines, path)
 
 
+def fix_line(raw_line):
+    """Auto-quote ambiguous scalars on a single line.
+
+    Returns (line, count). Only touches what YG003/YG005/YG006 flag (bare
+    booleans, octal, and base-60 lookalikes) -- wrapping the existing token
+    in quotes is a meaning-preserving fix. YG001/YG004 (duplicate keys) and
+    YG002 (tab indentation) have no single obviously-correct rewrite, so
+    --fix leaves them for a human.
+    """
+    line = raw_line.rstrip("\n")
+    newline = raw_line[len(line):]
+    if not line.strip():
+        return raw_line, 0
+
+    stripped = _strip_comment(line)
+    if not stripped.strip() or stripped.strip() == "---":
+        return raw_line, 0
+
+    parsed = _parse_key_line(stripped)
+    if parsed is None:
+        return raw_line, 0
+
+    edits = []
+    if (
+        parsed.value_raw
+        and not _is_quoted(parsed.value_raw)
+        and (
+            parsed.value_raw in AMBIGUOUS_SCALARS
+            or OCTAL_RE.match(parsed.value_raw)
+            or SEXAGESIMAL_RE.match(parsed.value_raw)
+        )
+    ):
+        start = parsed.value_start
+        edits.append((start, start + len(parsed.value_raw), _quote(parsed.value_raw)))
+
+    if not _is_quoted(parsed.key_raw) and parsed.key_raw in AMBIGUOUS_SCALARS:
+        start = parsed.key_indent
+        edits.append((start, start + len(parsed.key_raw), _quote(parsed.key_raw)))
+
+    if not edits:
+        return raw_line, 0
+
+    # Apply right-to-left so earlier edits' column offsets stay valid.
+    fixed = line
+    for start, end, replacement in sorted(edits, key=lambda e: e[0], reverse=True):
+        fixed = fixed[:start] + replacement + fixed[end:]
+
+    return fixed + newline, len(edits)
+
+
+def fix_file(path):
+    """Auto-quote ambiguous scalars in place. Returns the number of edits made."""
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    new_lines = []
+    fix_count = 0
+    for raw_line in lines:
+        fixed_line, n = fix_line(raw_line)
+        new_lines.append(fixed_line)
+        fix_count += n
+
+    if fix_count:
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+    return fix_count
+
+
 def print_human(findings, files_scanned):
     by_file = {}
     for f in findings:
@@ -269,7 +371,7 @@ def print_human(findings, files_scanned):
         print("no issues found in %d file(s)" % len(files_scanned))
 
 
-def print_json(findings, files_scanned):
+def print_json(findings, files_scanned, fixed_count=None):
     payload = {
         "files_scanned": files_scanned,
         "issue_count": len(findings),
@@ -284,6 +386,8 @@ def print_json(findings, files_scanned):
             for f in findings
         ],
     }
+    if fixed_count is not None:
+        payload["fixed_count"] = fixed_count
     print(json.dumps(payload, indent=2))
 
 
@@ -295,19 +399,33 @@ def main(argv=None):
     )
     parser.add_argument("files", nargs="+", help="YAML files to scan")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON instead of a text report")
+    parser.add_argument(
+        "--fix", action="store_true",
+        help="auto-quote ambiguous scalars in place (YG003, YG005, YG006 only; "
+             "duplicate keys and tab indentation still need a human)",
+    )
     args = parser.parse_args(argv)
 
     all_findings = []
+    total_fixed = 0
     for path in args.files:
         try:
+            if args.fix:
+                total_fixed += fix_file(path)
             all_findings.extend(scan_file(path))
         except OSError as exc:
             print("%s: %s" % (path, exc.strerror or exc), file=sys.stderr)
             return 2
 
     if args.json:
-        print_json(all_findings, args.files)
+        print_json(all_findings, args.files, total_fixed if args.fix else None)
     else:
+        if args.fix:
+            if total_fixed:
+                print("fixed %d issue(s)" % total_fixed)
+            else:
+                print("nothing to fix")
+            print()
         print_human(all_findings, args.files)
 
     return 1 if all_findings else 0

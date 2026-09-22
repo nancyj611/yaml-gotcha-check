@@ -74,6 +74,27 @@ a pre-commit hook that posts a PR comment, etc.) without scraping the
 text report. Exit code is `0` when a scan finds nothing, `1` when it
 finds issues, `2` on a file error (missing file, permission denied).
 
+`--fix` rewrites files in place, wrapping ambiguous scalars in quotes:
+
+```
+$ yamlgotcha --fix deploy.yaml
+fixed 1 issue(s)
+
+deploy.yaml
+  5:1   YG001  duplicate key 'retries' at this level (last one silently wins)
+
+1 issue(s) across 1 file(s)
+```
+
+`notify_on_failure: NO` becomes `notify_on_failure: "NO"` on disk, which
+parses as the string it was written as. `--fix` only rewrites what
+YG003, YG005, and YG006 flag — a bare scalar becomes a quoted one, which
+never changes the file's meaning. Duplicate keys (YG001, YG004) and tab
+indentation (YG002) aren't touched: there's no single rewrite that's
+obviously correct, since the fix depends on which duplicate value or
+indentation style was actually intended. The scan still runs after
+fixing, so anything `--fix` couldn't handle shows up in the report.
+
 Scan as many files as you want in one call:
 
 ```
@@ -118,3 +139,6 @@ would require carrying bracket-nesting state between lines instead of
 resetting per line. It also does not check for duplicate keys inside
 block scalars. See the roadmap in commit history for what's planned
 next.
+
+There's no test suite yet — the scanner has only been exercised by hand
+against the examples above. That's the next thing to add.
