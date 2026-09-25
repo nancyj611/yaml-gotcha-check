@@ -1,0 +1,4 @@
+region: eu-west-1
+retries: 3
+mode: "0755"
+enabled: "no"

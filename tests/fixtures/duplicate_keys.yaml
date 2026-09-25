@@ -1,0 +1,6 @@
+region: eu-west-1
+retries: 3
+retries: 5
+nested:
+  a: 1
+  a: 2

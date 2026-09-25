@@ -140,5 +140,12 @@ resetting per line. It also does not check for duplicate keys inside
 block scalars. See the roadmap in commit history for what's planned
 next.
 
-There's no test suite yet — the scanner has only been exercised by hand
-against the examples above. That's the next thing to add.
+## Tests
+
+```
+python -m unittest discover -s tests
+```
+
+Fixtures live under `tests/fixtures/`, one file per rule, plus a clean
+file and a `---`-separated multi-document file that checks duplicate-key
+tracking resets at document boundaries.
